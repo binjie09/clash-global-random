@@ -2,8 +2,7 @@ version: '3.9'
 
 services:
   clash:
-    build: .
-    image: clash-global-random:latest
+    image: ghcr.io/binjie09/clash-global-random:latest
     container_name: clash-global-random
     volumes:
       - ./config.yaml:/root/.config/clash/config.yaml:ro
@@ -19,3 +18,6 @@ services:
     #   - TEST_URL_ENCODED=https:%2F%2Fwww.gstatic.com%2Fgenerate_204
     #   - TEST_TIMEOUT_MS=5000
     #   - MAX_DELAY_MS=1200
+
+    # For local development only:
+    # build: .

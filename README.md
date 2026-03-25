@@ -41,13 +41,15 @@ proxy-groups:
       - node-a
 ```
 
-## Build
+## Quick Start
+
+Pull the published image:
 
 ```bash
-docker build -t clash-global-random:latest .
+docker pull ghcr.io/binjie09/clash-global-random:latest
 ```
 
-## Run
+Run it directly:
 
 ```bash
 docker run -d \
@@ -56,7 +58,7 @@ docker run -d \
   -p 7890:7890 \
   -p 7891:7891 \
   -p 9090:9090 \
-  clash-global-random:latest
+  ghcr.io/binjie09/clash-global-random:latest
 ```
 
 ## Docker Compose
@@ -67,7 +69,15 @@ Create `config.yaml` in the project root, then run:
 docker-compose up -d
 ```
 
-The included `docker-compose.yml` already mounts `./config.yaml`.
+The included `docker-compose.yml` pulls `ghcr.io/binjie09/clash-global-random:latest` and mounts `./config.yaml`.
+
+## Local Build
+
+If you want to build locally instead of using GHCR:
+
+```bash
+docker build -t clash-global-random:latest .
+```
 
 ## Environment Variables
 
@@ -93,7 +103,7 @@ It also includes a local helper script:
 It publishes to:
 
 ```text
-ghcr.io/<github-owner>/clash-global-random
+ghcr.io/binjie09/clash-global-random
 ```
 
 Before using it:
@@ -106,7 +116,7 @@ Before using it:
 For local publish:
 
 ```bash
-OWNER=your-github-user TAG=latest GHCR_TOKEN=your-token ./scripts/publish-ghcr.sh
+GHCR_TOKEN=your-token TAG=latest ./scripts/publish-ghcr.sh
 ```
 
 ## Notes
