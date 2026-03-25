@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+  clash:
+    build: .
+    image: clash-global-random:latest
+    container_name: clash-global-random
+    volumes:
+      - ./config.yaml:/root/.config/clash/config.yaml:ro
+    ports:
+      - "7890:7890"
+      - "7891:7891"
+      - "9090:9090"
+    restart: unless-stopped
+
+    # Optional:
+    # environment:
+    #   - TARGET_GROUP=GLOBAL
+    #   - TEST_URL_ENCODED=https:%2F%2Fwww.gstatic.com%2Fgenerate_204
+    #   - TEST_TIMEOUT_MS=5000
+    #   - MAX_DELAY_MS=1200
