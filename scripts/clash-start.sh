@@ -2,6 +2,7 @@
 set -eu
 
 CONFIG_PATH="${CONFIG_PATH:-/root/.config/clash/config.yaml}"
+CONFIG_DIR="${CONFIG_DIR:-}"
 API_HOST="${API_HOST:-}"
 API_PORT="${API_PORT:-}"
 API_SECRET="${API_SECRET:-}"
@@ -9,6 +10,7 @@ TARGET_GROUP="${TARGET_GROUP:-GLOBAL}"
 TEST_URL_ENCODED="${TEST_URL_ENCODED:-https:%2F%2Fwww.gstatic.com%2Fgenerate_204}"
 TEST_TIMEOUT_MS="${TEST_TIMEOUT_MS:-5000}"
 MAX_DELAY_MS="${MAX_DELAY_MS:-0}"
+CORE_BIN="${CORE_BIN:-}"
 
 cleanup() {
   if [ "${clash_pid:-}" != "" ]; then
@@ -66,6 +68,42 @@ init_api_settings() {
   if [ -z "$API_SECRET" ] && [ -n "$secret_value" ]; then
     API_SECRET="$secret_value"
   fi
+}
+
+detect_core_bin() {
+  if [ -n "$CORE_BIN" ]; then
+    return 0
+  fi
+
+  if command -v mihomo >/dev/null 2>&1; then
+    CORE_BIN="$(command -v mihomo)"
+    return 0
+  fi
+
+  if [ -x /mihomo ]; then
+    CORE_BIN="/mihomo"
+    return 0
+  fi
+
+  if command -v clash >/dev/null 2>&1; then
+    CORE_BIN="$(command -v clash)"
+    return 0
+  fi
+
+  if [ -x /clash ]; then
+    CORE_BIN="/clash"
+    return 0
+  fi
+
+  echo "No supported Clash-compatible core binary found" >&2
+  exit 1
+}
+
+init_config_dir() {
+  if [ -n "$CONFIG_DIR" ]; then
+    return 0
+  fi
+  CONFIG_DIR="$(dirname "$CONFIG_PATH")"
 }
 
 extract_proxy_names() {
@@ -205,8 +243,10 @@ test_current_proxy() {
 }
 
 init_api_settings
+detect_core_bin
+init_config_dir
 
-/clash &
+"$CORE_BIN" -d "$CONFIG_DIR" -f "$CONFIG_PATH" &
 clash_pid=$!
 
 if wait_for_api; then

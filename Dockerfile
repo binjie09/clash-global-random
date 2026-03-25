@@ -1,4 +1,4 @@
-FROM dreamacro/clash:latest
+FROM metacubex/mihomo:latest
 
 ENV CONFIG_PATH=/root/.config/clash/config.yaml
 ENV TARGET_GROUP=GLOBAL

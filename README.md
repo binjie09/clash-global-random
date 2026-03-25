@@ -1,6 +1,8 @@
 # clash-global-random
 
-An image wrapper around `dreamacro/clash` that automatically selects a healthy proxy for the `GLOBAL` selector on startup.
+An image wrapper around `metacubex/mihomo` that automatically selects a healthy proxy for the `GLOBAL` selector on startup.
+
+This project uses Mihomo instead of the old Dreamacro Clash image because Mihomo supports newer proxy types such as `vless`.
 
 ## What It Does
 
