@@ -3,106 +3,44 @@ set -eu
 
 CONFIG_PATH="${CONFIG_PATH:-/root/.config/clash/config.yaml}"
 CONFIG_DIR="${CONFIG_DIR:-}"
-API_HOST="${API_HOST:-}"
-API_PORT="${API_PORT:-}"
 API_SECRET="${API_SECRET:-}"
 TARGET_GROUP="${TARGET_GROUP:-GLOBAL}"
-TEST_URL_ENCODED="${TEST_URL_ENCODED:-https:%2F%2Fwww.gstatic.com%2Fgenerate_204}"
-TEST_TIMEOUT_MS="${TEST_TIMEOUT_MS:-5000}"
-MAX_DELAY_MS="${MAX_DELAY_MS:-0}"
 CORE_BIN="${CORE_BIN:-}"
+N_PROXIES="${N_PROXIES:-1}"
+BASE_PORT="${BASE_PORT:-7890}"
+API_BASE_PORT="${API_BASE_PORT:-19090}"
+
+PIDS_FILE="/tmp/clash-instance-pids"
+PROXY_LIST_FILE="/tmp/clash-proxy-list"
+: > "$PIDS_FILE"
 
 cleanup() {
-  if [ "${clash_pid:-}" != "" ]; then
-    kill "$clash_pid" 2>/dev/null || true
-    wait "$clash_pid" 2>/dev/null || true
+  if [ -f "$PIDS_FILE" ]; then
+    while IFS= read -r _pid; do
+      [ -n "$_pid" ] || continue
+      kill "$_pid" 2>/dev/null || true
+    done < "$PIDS_FILE"
+    while IFS= read -r _pid; do
+      [ -n "$_pid" ] || continue
+      wait "$_pid" 2>/dev/null || true
+    done < "$PIDS_FILE"
   fi
 }
 
 trap cleanup INT TERM
 
-trim_quotes() {
-  value="$1"
-  case "$value" in
-    \"*\")
-      value="${value#\"}"
-      value="${value%\"}"
-      ;;
-    \'*\')
-      value="${value#\'}"
-      value="${value%\'}"
-      ;;
-  esac
-  printf '%s' "$value"
-}
-
-read_top_level_value() {
-  key="$1"
-  awk -v key="$key" '
-    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
-      line = $0
-      sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
-      sub(/[[:space:]]+#.*$/, "", line)
-      print line
-      exit
-    }
-  ' "$CONFIG_PATH"
-}
-
-init_api_settings() {
-  controller_value="$(trim_quotes "$(read_top_level_value external-controller || true)")"
-  secret_value="$(trim_quotes "$(read_top_level_value secret || true)")"
-
-  if [ -z "$API_PORT" ] && [ -n "$controller_value" ]; then
-    API_PORT="${controller_value##*:}"
-  fi
-
-  if [ -z "$API_PORT" ]; then
-    API_PORT="9090"
-  fi
-
-  if [ -z "$API_HOST" ]; then
-    API_HOST="127.0.0.1"
-  fi
-
-  if [ -z "$API_SECRET" ] && [ -n "$secret_value" ]; then
-    API_SECRET="$secret_value"
-  fi
-}
-
 detect_core_bin() {
-  if [ -n "$CORE_BIN" ]; then
-    return 0
-  fi
-
-  if command -v mihomo >/dev/null 2>&1; then
-    CORE_BIN="$(command -v mihomo)"
-    return 0
-  fi
-
-  if [ -x /mihomo ]; then
-    CORE_BIN="/mihomo"
-    return 0
-  fi
-
-  if command -v clash >/dev/null 2>&1; then
-    CORE_BIN="$(command -v clash)"
-    return 0
-  fi
-
-  if [ -x /clash ]; then
-    CORE_BIN="/clash"
-    return 0
-  fi
-
+  if [ -n "$CORE_BIN" ]; then return 0; fi
+  if command -v mihomo >/dev/null 2>&1; then CORE_BIN="$(command -v mihomo)"; return 0; fi
+  if [ -x /mihomo ]; then CORE_BIN="/mihomo"; return 0; fi
+  if command -v clash >/dev/null 2>&1; then CORE_BIN="$(command -v clash)"; return 0; fi
+  if [ -x /clash ]; then CORE_BIN="/clash"; return 0; fi
   echo "No supported Clash-compatible core binary found" >&2
   exit 1
 }
 
 init_config_dir() {
-  if [ -n "$CONFIG_DIR" ]; then
-    return 0
-  fi
+  if [ -n "$CONFIG_DIR" ]; then return 0; fi
   CONFIG_DIR="$(dirname "$CONFIG_PATH")"
 }
 
@@ -179,111 +117,146 @@ shuffle_proxy_names() {
   '
 }
 
-wait_for_api() {
-  tries=0
-  while [ "$tries" -lt 30 ]; do
-    if wget -qO- "http://${API_HOST}:${API_PORT}/version" >/dev/null 2>&1; then
+wait_for_api_port() {
+  _port="$1"
+  _tries=0
+  while [ "$_tries" -lt 30 ]; do
+    if wget -qO- "http://127.0.0.1:${_port}/version" >/dev/null 2>&1; then
       return 0
     fi
-    tries=$((tries + 1))
+    _tries=$((_tries + 1))
     sleep 1
   done
   return 1
 }
 
-request_headers() {
-  printf 'Host: %s:%s\r\n' "$API_HOST" "$API_PORT"
-  if [ -n "$API_SECRET" ]; then
-    printf 'Authorization: Bearer %s\r\n' "$API_SECRET"
-  fi
-}
+select_proxy_on_port() {
+  _api_port="$1"
+  _proxy_name="$2"
+  _escaped=$(printf '%s' "$_proxy_name" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  _payload=$(printf '{"name":"%s"}' "$_escaped")
+  _len=$(printf '%s' "$_payload" | wc -c | tr -d ' ')
 
-select_proxy() {
-  proxy_name="$1"
-  escaped_name=$(printf '%s' "$proxy_name" | sed 's/\\/\\\\/g; s/"/\\"/g')
-  payload=$(printf '{"name":"%s"}' "$escaped_name")
-  payload_length=$(printf '%s' "$payload" | wc -c | tr -d ' ')
-
-  response=$(
+  _response=$(
     {
       printf 'PUT /proxies/%s HTTP/1.1\r\n' "$TARGET_GROUP"
-      request_headers
+      printf 'Host: 127.0.0.1:%s\r\n' "$_api_port"
+      if [ -n "$API_SECRET" ]; then
+        printf 'Authorization: Bearer %s\r\n' "$API_SECRET"
+      fi
       printf 'Content-Type: application/json\r\n'
-      printf 'Content-Length: %s\r\n' "$payload_length"
+      printf 'Content-Length: %s\r\n' "$_len"
       printf 'Connection: close\r\n'
       printf '\r\n'
-      printf '%s' "$payload"
-    } | nc -w 3 "$API_HOST" "$API_PORT" 2>/dev/null || true
+      printf '%s' "$_payload"
+    } | nc -w 3 127.0.0.1 "$_api_port" 2>/dev/null || true
   )
 
-  printf '%s' "$response" | grep -Eq '^HTTP/1\.[01] 204|^HTTP/1\.[01] 200'
+  printf '%s' "$_response" | grep -Eq '^HTTP/1\.[01] 204|^HTTP/1\.[01] 200'
 }
 
-test_current_proxy() {
-  if [ -n "$API_SECRET" ]; then
-    response=$(
-      wget --header="Authorization: Bearer ${API_SECRET}" -qO- "http://${API_HOST}:${API_PORT}/proxies/${TARGET_GROUP}/delay?url=${TEST_URL_ENCODED}&timeout=${TEST_TIMEOUT_MS}" 2>/dev/null || true
-    )
-  else
-    response=$(
-      wget -qO- "http://${API_HOST}:${API_PORT}/proxies/${TARGET_GROUP}/delay?url=${TEST_URL_ENCODED}&timeout=${TEST_TIMEOUT_MS}" 2>/dev/null || true
-    )
-  fi
+create_instance_config() {
+  _idx="$1"
+  _http_port="$2"
+  _api_port="$3"
+  _dir="/tmp/clash-instance-${_idx}"
+  mkdir -p "$_dir"
 
-  delay_value=$(printf '%s' "$response" | sed -n 's/.*"delay":\([0-9][0-9]*\).*/\1/p')
-  if [ -z "$delay_value" ]; then
-    return 1
-  fi
+  awk -v http_port="$_http_port" -v api_port="$_api_port" '
+    /^port:[[:space:]]/ {
+      print "port: " http_port
+      has_port = 1
+      next
+    }
+    /^socks-port:[[:space:]]/ {
+      print "socks-port: 0"
+      next
+    }
+    /^mixed-port:[[:space:]]/ {
+      print "mixed-port: 0"
+      next
+    }
+    /^external-controller:[[:space:]]/ {
+      print "external-controller: \"127.0.0.1:" api_port "\""
+      has_controller = 1
+      next
+    }
+    { print }
+    END {
+      if (!has_port) print "port: " http_port
+      if (!has_controller) print "external-controller: \"127.0.0.1:" api_port "\""
+    }
+  ' "$CONFIG_PATH" > "${_dir}/config.yaml"
 
-  if [ "$MAX_DELAY_MS" -gt 0 ] && [ "$delay_value" -gt "$MAX_DELAY_MS" ]; then
-    return 1
-  fi
+  # Symlink GeoIP/GeoSite databases so each instance can find them
+  for _f in \
+    "$CONFIG_DIR/Country.mmdb" \
+    "$CONFIG_DIR/GeoIP.dat" \
+    "$CONFIG_DIR/GeoSite.dat" \
+    "$CONFIG_DIR/geoip.db" \
+    "$CONFIG_DIR/geosite.db" \
+    "$CONFIG_DIR/ASN.mmdb"
+  do
+    [ -f "$_f" ] && ln -sf "$_f" "${_dir}/$(basename "$_f")" 2>/dev/null || true
+  done
 
-  echo "$delay_value"
+  printf '%s' "$_dir"
 }
 
-init_api_settings
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 detect_core_bin
 init_config_dir
 
-"$CORE_BIN" -d "$CONFIG_DIR" -f "$CONFIG_PATH" &
-clash_pid=$!
+shuffle_proxy_names > "$PROXY_LIST_FILE"
+total_proxies=$(wc -l < "$PROXY_LIST_FILE" | tr -d ' ')
 
-if wait_for_api; then
-  proxy_candidates="$(shuffle_proxy_names || true)"
-  if [ -z "$proxy_candidates" ]; then
-    echo "No proxies found in $CONFIG_PATH" >&2
-  else
-    selected_proxy=""
-    selected_delay=""
-    while IFS= read -r proxy_name; do
-      [ -n "$proxy_name" ] || continue
-
-      if ! select_proxy "$proxy_name"; then
-        echo "Failed to switch ${TARGET_GROUP} to proxy: $proxy_name" >&2
-        continue
-      fi
-
-      delay_value="$(test_current_proxy || true)"
-      if [ -n "$delay_value" ]; then
-        selected_proxy="$proxy_name"
-        selected_delay="$delay_value"
-        break
-      fi
-
-      echo "Proxy check failed for ${proxy_name}, trying another proxy" >&2
-    done <<EOF
-$proxy_candidates
-EOF
-
-    if [ -n "$selected_proxy" ]; then
-      echo "Healthy proxy selected for ${TARGET_GROUP}: ${selected_proxy} (${selected_delay} ms)"
-    else
-      echo "No healthy proxy found for ${TARGET_GROUP}" >&2
-    fi
-  fi
-else
-  echo "Clash management API did not become ready in time" >&2
+if [ "$total_proxies" -eq 0 ]; then
+  echo "No proxies found in $CONFIG_PATH" >&2
+  exit 1
 fi
 
-wait "$clash_pid"
+actual_n="$N_PROXIES"
+if [ "$actual_n" -gt "$total_proxies" ]; then
+  echo "Warning: requested $N_PROXIES proxies but only $total_proxies available. Starting $total_proxies instance(s)." >&2
+  actual_n="$total_proxies"
+fi
+
+echo "Starting $actual_n clash instance(s) on ports ${BASE_PORT}–$((BASE_PORT + actual_n - 1))..."
+
+i=0
+while IFS= read -r proxy_name; do
+  [ "$i" -lt "$actual_n" ] || break
+  [ -n "$proxy_name" ] || continue
+
+  http_port=$((BASE_PORT + i))
+  api_port=$((API_BASE_PORT + i))
+
+  instance_dir="$(create_instance_config "$i" "$http_port" "$api_port")"
+
+  "$CORE_BIN" -d "$instance_dir" -f "${instance_dir}/config.yaml" &
+  pid=$!
+  printf '%s\n' "$pid" >> "$PIDS_FILE"
+
+  echo "Instance $((i + 1))/$actual_n: HTTP port=$http_port  proxy=$proxy_name  pid=$pid"
+
+  if wait_for_api_port "$api_port"; then
+    if select_proxy_on_port "$api_port" "$proxy_name"; then
+      echo "Instance $((i + 1)): proxy selected: $proxy_name"
+    else
+      echo "Instance $((i + 1)): failed to select proxy: $proxy_name" >&2
+    fi
+  else
+    echo "Instance $((i + 1)): API did not become ready on port $api_port" >&2
+  fi
+
+  i=$((i + 1))
+done < "$PROXY_LIST_FILE"
+
+echo "All $actual_n instance(s) running."
+
+# Wait for all instances to exit
+while IFS= read -r _pid; do
+  [ -n "$_pid" ] || continue
+  wait "$_pid" 2>/dev/null || true
+done < "$PIDS_FILE"

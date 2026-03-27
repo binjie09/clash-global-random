@@ -7,17 +7,16 @@ services:
     volumes:
       - ./config.yaml:/root/.config/clash/config.yaml:ro
     ports:
-      - "7890:7890"
-      - "7891:7891"
-      - "9090:9090"
+      # Expose one port per proxy instance.
+      # Adjust the range to match N_PROXIES (e.g. N_PROXIES=3 → "7890-7892:7890-7892").
+      - "7890-7892:7890-7892"
     restart: unless-stopped
-
-    # Optional:
-    # environment:
-    #   - TARGET_GROUP=GLOBAL
-    #   - TEST_URL_ENCODED=https:%2F%2Fwww.gstatic.com%2Fgenerate_204
-    #   - TEST_TIMEOUT_MS=5000
-    #   - MAX_DELAY_MS=1200
+    environment:
+      - N_PROXIES=3        # number of parallel proxy instances
+      - BASE_PORT=7890     # first HTTP proxy port; instances get 7890, 7891, 7892, …
+      # - TARGET_GROUP=GLOBAL
+      # - API_BASE_PORT=19090   # internal API port base (not exposed)
+      # - API_SECRET=
 
     # For local development only:
     # build: .
