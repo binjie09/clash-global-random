@@ -12,8 +12,11 @@ services:
       - "7890-7892:7890-7892"
     restart: unless-stopped
     environment:
-      - N_PROXIES=3        # number of parallel proxy instances
+      - N_PROXIES=11        # number of parallel proxy instances
       - BASE_PORT=7890     # first HTTP proxy port; instances get 7890, 7891, 7892, …
+      # Exclude proxies whose name matches this regex (grep -Ev).
+      # Example: exclude nodes containing any of these strings:
+      - EXCLUDE_PATTERN=香港|俄罗斯|剩余流量|套餐到期|台湾
       # - TARGET_GROUP=GLOBAL
       # - API_BASE_PORT=19090   # internal API port base (not exposed)
       # - API_SECRET=

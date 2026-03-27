@@ -9,6 +9,7 @@ CORE_BIN="${CORE_BIN:-}"
 N_PROXIES="${N_PROXIES:-1}"
 BASE_PORT="${BASE_PORT:-7890}"
 API_BASE_PORT="${API_BASE_PORT:-19090}"
+EXCLUDE_PATTERN="${EXCLUDE_PATTERN:-}"
 
 PIDS_FILE="/tmp/clash-instance-pids"
 PROXY_LIST_FILE="/tmp/clash-proxy-list"
@@ -208,7 +209,12 @@ create_instance_config() {
 detect_core_bin
 init_config_dir
 
-shuffle_proxy_names > "$PROXY_LIST_FILE"
+if [ -n "$EXCLUDE_PATTERN" ]; then
+  shuffle_proxy_names | grep -Ev "$EXCLUDE_PATTERN" > "$PROXY_LIST_FILE" || true
+  echo "Excluding proxies matching: $EXCLUDE_PATTERN"
+else
+  shuffle_proxy_names > "$PROXY_LIST_FILE"
+fi
 total_proxies=$(wc -l < "$PROXY_LIST_FILE" | tr -d ' ')
 
 if [ "$total_proxies" -eq 0 ]; then
