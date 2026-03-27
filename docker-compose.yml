@@ -9,17 +9,20 @@ services:
     ports:
       # Expose one port per proxy instance.
       # Adjust the range to match N_PROXIES (e.g. N_PROXIES=3 → "7890-7892:7890-7892").
-      - "7890-7892:7890-7892"
+      - "17890-17899:7890-7899"
     restart: unless-stopped
     environment:
-      - N_PROXIES=11        # number of parallel proxy instances
+      - N_PROXIES=10        # number of parallel proxy instances
       - BASE_PORT=7890     # first HTTP proxy port; instances get 7890, 7891, 7892, …
       # Exclude proxies whose name matches this regex (grep -Ev).
       # Example: exclude nodes containing any of these strings:
       - EXCLUDE_PATTERN=香港|俄罗斯|剩余流量|套餐到期|台湾
       # - TARGET_GROUP=GLOBAL
-      # - API_BASE_PORT=19090   # internal API port base (not exposed)
+      # - API_BASE_PORT=19090      # internal API port base (not exposed)
       # - API_SECRET=
+      # - TEST_URL_ENCODED=https:%2F%2Fwww.gstatic.com%2Fgenerate_204
+      # - TEST_TIMEOUT_MS=5000
+      # - MAX_DELAY_MS=1200        # skip proxies with delay > this (0 = disabled)
 
     # For local development only:
     # build: .

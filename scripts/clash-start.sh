@@ -5,6 +5,9 @@ CONFIG_PATH="${CONFIG_PATH:-/root/.config/clash/config.yaml}"
 CONFIG_DIR="${CONFIG_DIR:-}"
 API_SECRET="${API_SECRET:-}"
 TARGET_GROUP="${TARGET_GROUP:-GLOBAL}"
+TEST_URL_ENCODED="${TEST_URL_ENCODED:-https:%2F%2Fwww.gstatic.com%2Fgenerate_204}"
+TEST_TIMEOUT_MS="${TEST_TIMEOUT_MS:-5000}"
+MAX_DELAY_MS="${MAX_DELAY_MS:-0}"
 CORE_BIN="${CORE_BIN:-}"
 N_PROXIES="${N_PROXIES:-1}"
 BASE_PORT="${BASE_PORT:-7890}"
@@ -13,7 +16,9 @@ EXCLUDE_PATTERN="${EXCLUDE_PATTERN:-}"
 
 PIDS_FILE="/tmp/clash-instance-pids"
 PROXY_LIST_FILE="/tmp/clash-proxy-list"
+USED_PROXIES_FILE="/tmp/clash-used-proxies"
 : > "$PIDS_FILE"
+: > "$USED_PROXIES_FILE"
 
 cleanup() {
   if [ -f "$PIDS_FILE" ]; then
@@ -156,6 +161,24 @@ select_proxy_on_port() {
   printf '%s' "$_response" | grep -Eq '^HTTP/1\.[01] 204|^HTTP/1\.[01] 200'
 }
 
+test_proxy_on_port() {
+  _api_port="$1"
+  if [ -n "$API_SECRET" ]; then
+    _response=$(wget --header="Authorization: Bearer ${API_SECRET}" -qO- \
+      "http://127.0.0.1:${_api_port}/proxies/${TARGET_GROUP}/delay?url=${TEST_URL_ENCODED}&timeout=${TEST_TIMEOUT_MS}" \
+      2>/dev/null || true)
+  else
+    _response=$(wget -qO- \
+      "http://127.0.0.1:${_api_port}/proxies/${TARGET_GROUP}/delay?url=${TEST_URL_ENCODED}&timeout=${TEST_TIMEOUT_MS}" \
+      2>/dev/null || true)
+  fi
+
+  _delay=$(printf '%s' "$_response" | sed -n 's/.*"delay":\([0-9][0-9]*\).*/\1/p')
+  if [ -z "$_delay" ]; then return 1; fi
+  if [ "$MAX_DELAY_MS" -gt 0 ] && [ "$_delay" -gt "$MAX_DELAY_MS" ]; then return 1; fi
+  printf '%s' "$_delay"
+}
+
 create_instance_config() {
   _idx="$1"
   _http_port="$2"
@@ -231,10 +254,7 @@ fi
 echo "Starting $actual_n clash instance(s) on ports ${BASE_PORT}–$((BASE_PORT + actual_n - 1))..."
 
 i=0
-while IFS= read -r proxy_name; do
-  [ "$i" -lt "$actual_n" ] || break
-  [ -n "$proxy_name" ] || continue
-
+while [ "$i" -lt "$actual_n" ]; do
   http_port=$((BASE_PORT + i))
   api_port=$((API_BASE_PORT + i))
 
@@ -244,20 +264,47 @@ while IFS= read -r proxy_name; do
   pid=$!
   printf '%s\n' "$pid" >> "$PIDS_FILE"
 
-  echo "Instance $((i + 1))/$actual_n: HTTP port=$http_port  proxy=$proxy_name  pid=$pid"
+  echo "Instance $((i + 1))/$actual_n: HTTP port=$http_port  pid=$pid"
 
   if wait_for_api_port "$api_port"; then
-    if select_proxy_on_port "$api_port" "$proxy_name"; then
-      echo "Instance $((i + 1)): proxy selected: $proxy_name"
+    assigned_proxy=""
+    assigned_delay=""
+
+    while IFS= read -r proxy_name; do
+      [ -n "$proxy_name" ] || continue
+
+      # Skip proxies already assigned to another instance
+      if grep -qxF "$proxy_name" "$USED_PROXIES_FILE" 2>/dev/null; then
+        continue
+      fi
+
+      if ! select_proxy_on_port "$api_port" "$proxy_name"; then
+        echo "Instance $((i + 1)): failed to switch to $proxy_name, skipping" >&2
+        continue
+      fi
+
+      _delay="$(test_proxy_on_port "$api_port" || true)"
+      if [ -n "$_delay" ]; then
+        assigned_proxy="$proxy_name"
+        assigned_delay="$_delay"
+        printf '%s\n' "$proxy_name" >> "$USED_PROXIES_FILE"
+        break
+      fi
+
+      echo "Instance $((i + 1)): $proxy_name unhealthy, trying next..." >&2
+    done < "$PROXY_LIST_FILE"
+
+    if [ -n "$assigned_proxy" ]; then
+      echo "Instance $((i + 1)): selected proxy: $assigned_proxy (${assigned_delay} ms) on port $http_port"
     else
-      echo "Instance $((i + 1)): failed to select proxy: $proxy_name" >&2
+      echo "Instance $((i + 1)): no healthy proxy found" >&2
     fi
   else
     echo "Instance $((i + 1)): API did not become ready on port $api_port" >&2
   fi
 
   i=$((i + 1))
-done < "$PROXY_LIST_FILE"
+done
 
 echo "All $actual_n instance(s) running."
 
